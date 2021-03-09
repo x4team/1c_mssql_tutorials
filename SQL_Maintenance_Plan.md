@@ -24,6 +24,51 @@
    
 *ПРосмотреть фрагментацию базы - ПКМ по базе -> Отчеты -> Стандартный отчет -> Физическая статистика индекса
 
+**Если нам нужно найти все фрагментированные индексы - можно сделать через скрипт SIMPLE:
+
+```
+select * from sys.dm_db_index_physical_stats(DB_ID(), NULL, NULL, NULL, NULL)
+where avg_fragmentation_in_percent > 30
+```
+*Если в найденных индексах **page_count** слишком маленький, то этот индекс НЕ ПЕРЕСТРОИТСЯ
+
+**ПОЛНЫЙ скрипт для отображения фрагментированный индексов с page_count > 100**
+
+```
+SELECT TOP 100
+       DatbaseName = DB_NAME(),
+       TableName = OBJECT_NAME(s.[object_id]),
+       IndexName = i.name,
+       i.type_desc,
+       [Fragmentation %] = ROUND(avg_fragmentation_in_percent,2),
+       page_count,
+       partition_number,
+       'alter index [' + i.name + '] on [' + sh.name + '].['+ OBJECT_NAME(s.[object_id]) + '] REBUILD' + case
+                                                                                                           when p.data_space_id is not null then ' PARTITION = '+convert(varchar(100),partition_number)
+                                                                                                           else ''
+                                                                                                         end + ' with(maxdop = 4,  SORT_IN_TEMPDB = on)' [sql]
+  FROM sys.dm_db_index_physical_stats(db_id(),null, null, null, null) s
+  INNER JOIN sys.indexes as i ON s.[object_id] = i.[object_id] AND
+                                 s.index_id = i.index_id
+  left join sys.partition_schemes as p on i.data_space_id = p.data_space_id
+  left join sys.objects o on  s.[object_id] = o.[object_id]
+  left join sys.schemas as sh on sh.[schema_id] = o.[schema_id]
+  WHERE s.database_id = DB_ID() AND
+        i.name IS NOT NULL AND
+        OBJECTPROPERTY(s.[object_id], 'IsMsShipped') = 0 and
+        page_count > 100 and
+        avg_fragmentation_in_percent > 10
+  ORDER BY 4, page_count
+ ```
+ 
+ Все скрипты по индексам смотреть здесь https://expert.chistov.pro/public/308762/
+ 
+ Скрипт дефрагментации индексов (перестроение и реорганизация) https://gist.github.com/KotegBegemoteg/d224be2683bcb4e4e7a1520f5ff9ee8b
+ 
+ **ВАЖНО!** *Индекс нельзя реорганизовать или перестроить, если файловая группа, в которой он расположен, находится в автономном режиме или предназначен только для чтения. Если указывается ключевое слово ALL, а один или несколько индексов размещены в файловой группе, которая находится в автономном режиме или предназначена только для чтения, то выполнить инструкцию не удастся.
+
+*При перестроении индекса на физическом носителе должно быть достаточно места для хранения двух копий индекса. По завершении перестроейния SQL Server удаляет исходный индекс
+
 5) Добавляем новую задачу **"Обновление статистики"**. В свойствах выбираем наш объект БД. Все по умолчанию - кликаем ОК. СОЕДИНЯЕМ с предыдущим объектом СТРЕЛОЧКОЙ.
 
 *Но на этот раз достаточно выбрать статус "Завершение" для стрелочки, так как мы знаем что "Проверка целостности" базы прошла успешно.
